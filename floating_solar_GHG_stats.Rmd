@@ -1,0 +1,923 @@
+
+Order of stats:
+1. Top/bottom dissolved concentrations
+2. Bubble trap data
+3. Time since install top/bottom concentration
+4. Import weather data
+5. Calculate diffusive flux for center and edge
+6. Calculate total emissions on a given day
+7. Statistical comparison of k600 values
+
+Load libraries
+```{r}
+library(tidyverse)
+library(ggplot2)
+library(ggtext)
+library(patchwork)
+library(Matrix)
+library(lme4)
+library(emmeans)
+library(readxl)
+```
+
+
+Load up the headspace data:
+```{r}
+#set the working directory before starting!!!
+
+#load the headspace data
+fs_headspace_dat <- read_excel("floating_solar_ghg_data.xlsx", 
+    sheet = "fs_headspace_dat")
+
+#tidy it up
+fs_headspace_dat$pond = as.factor(fs_headspace_dat$pond)
+
+#make negatives equal to zero
+fs_headspace_dat$co2_conc[fs_headspace_dat$co2_conc < 0] = 0
+fs_headspace_dat$ch4_conc[fs_headspace_dat$ch4_conc < 0] = 0
+
+#separate out the center/edge comp for later
+center_edge_dat = fs_headspace_dat
+#and then kick out the edge data for the center comparisons, and rename the "center" as "top"
+headspace = subset(fs_headspace_dat, top_bottom != "edge")
+#rename row 523-534
+headspace[(which(headspace$top_bottom == "center")), "top_bottom"] <- "Top"
+
+#make a summary dataset of all the technical replicates --use this for stats and future flux calcs
+library(dplyr)
+headspace_mean = headspace %>%
+  group_by(doy, year, pond, top_bottom, condition, treatment, pre_post, days_since_install) %>%
+  dplyr::summarize(mean_co2 = mean(co2_conc, na.rm = TRUE),
+                   mean_ch4 = mean(ch4_conc, na.rm = TRUE),
+                   mean_air_co2 = mean(air_co2_ppm),
+                   mean_air_ch4 = mean(air_ch4_ppm))
+headspace_mean$pond = as.factor(headspace_mean$pond)
+```
+
+Make simple comparison figures for the top/bottom dissolved CO2 concentrations
+```{r}
+#make the summary dataset of the gases for the treatment comparison figures:
+treatment_mean = headspace_mean %>%
+  group_by(doy,year, top_bottom, condition, treatment, pre_post) %>%
+  dplyr::summarize(big_mean_co2 = mean(mean_co2, na.rm = TRUE),
+                   se_co2 = (sd(mean_co2)/sqrt(length(mean_co2))),
+                   big_mean_ch4 = mean(mean_ch4, na.rm = TRUE),
+                   se_ch4 = (sd(mean_ch4)/sqrt(length(mean_ch4))))
+
+top_headspace = subset(treatment_mean, top_bottom == "Top")
+bottom_headspace = subset(treatment_mean, top_bottom == "Bottom")
+
+#co2 first
+max(top_headspace$big_mean_co2)
+max(bottom_headspace$big_mean_co2)
+
+#separate the 2023 data
+top_headspace_2023 = subset(top_headspace, year == "2023")
+bottom_headspace_2023 = subset(bottom_headspace, year == "2023")
+top_headspace_2022 = subset(top_headspace, year == "2022")
+bottom_headspace_2022 = subset(bottom_headspace, year == "2022")
+
+#and get rid of the "NA" samples for 125 became a panel pond
+top_headspace_2023 = subset(top_headspace_2023, treatment != "NA")
+bottom_headspace_2023 = subset(bottom_headspace, treatment != "NA")
+
+top_co2_fig_2023 = ggplot(data = top_headspace_2023, aes(x = doy, y = big_mean_co2, fill = treatment, color = treatment))+
+  geom_line()+
+  geom_point()+
+  theme_classic()+
+  geom_errorbar(aes(x = doy, ymin = big_mean_co2 - se_co2, ymax = big_mean_co2 + se_co2), width = 0, color = "black")+
+  geom_point(size = 3, shape = 16)+
+  geom_point(size = 3, shape = 1, color = "black")+
+  labs(y= "Surface [CO<sub>2</sub>]<br> (\u03bcmol L<sup>-1</sup>)", x = "Day of Year")+
+  theme(axis.text.x =  element_text(size = 8,colour = "black"),
+         axis.text.y =  element_text(size = 8,colour = "black"),
+         axis.title.x = element_blank(),
+        axis.title.y = element_markdown(size = 8))+
+  scale_fill_manual(values = c("#deebf7", "#3182bd"))+
+  scale_color_manual(values = c("#deebf7", "#3182bd"))+
+  theme(legend.position = "NULL")+
+  scale_y_continuous(limits = c(0,220), breaks = c(0, 50, 100, 150, 200))+
+  scale_x_continuous(limits = c(141,308))+
+  annotate("text", x = (141), y = 220, label = "2023", size = 2.822,  fontface = "italic")+
+  geom_segment(aes(x = 166, y = 220, xend = 195, yend = 220), linewidth = 2, linetype = "solid", color = "gray")+
+  geom_segment(aes(x = 195, y = 220, xend = 306, yend = 220), linewidth = 2, linetype = "solid", color = "black")
+top_co2_fig_2023
+
+top_co2_fig_2022 = ggplot(data = top_headspace_2022, aes(x = doy, y = big_mean_co2, fill = treatment, color = treatment))+
+  geom_line()+
+  geom_point()+
+  theme_classic()+
+  geom_errorbar(aes(x = doy, ymin = big_mean_co2 - se_co2, ymax = big_mean_co2 + se_co2), width = 0, color = "black")+
+  geom_point(size = 3, shape = 16)+
+  geom_point(size = 3, shape = 1, color = "black")+
+  labs(y= "Surface [CO<sub>2</sub>]<br> (\u03bcmol L<sup>-1</sup>)", x = "Day of Year")+
+  theme(axis.text.x =  element_text(size = 8,colour = "black"),
+         axis.text.y =  element_text(size = 8,colour = "black"),
+         axis.title.x = element_blank(),
+        axis.title.y = element_markdown(size = 8))+
+  scale_fill_manual(values = c("#deebf7", "#3182bd"))+
+  scale_color_manual(values = c("#deebf7", "#3182bd"))+
+  theme(legend.position = "NULL")+
+  annotate("text", x = (220), y = 220, label = "2022", size = 2.822,  fontface = "italic")+
+  scale_y_continuous(limits = c(0,220), breaks = c(0, 50, 100, 150, 200))+
+  scale_x_continuous(limits = c(215,225), breaks = c(215,225))
+top_co2_fig_2022
+
+##and do the BACI comparison
+#prep the data
+headspace_mean_top = subset(headspace_mean, top_bottom == "Top")
+headspace_mean_top = subset(headspace_mean_top, condition != "construction")
+
+#lme4 is acting up with newly installed R... the code below fixes it after restarting a new R session (needed to update package compatability)...
+#oo <- options(repos = "https://cran.r-project.org/")
+#install.packages("Matrix")
+#install.packages("lme4")
+#options(oo)
+#library(lme4)
+
+top_co2_model = lmer(mean_co2 ~ treatment*pre_post + doy + (1|pond), data = headspace_mean_top)
+summary(top_co2_model)
+lsmeans(top_co2_model, pairwise ~ treatment)
+
+#make a little boxplot showing all the open vs. panel values
+top_co2_box = ggplot()+
+  theme_classic()+
+  geom_boxplot(data = headspace_mean_top, aes(x = condition, y = mean_co2), outlier.shape = NA, color = "black")+
+  geom_jitter(data = headspace_mean_top, aes(x = condition, y = mean_co2, fill = condition, color = condition),width = 0.2, size = 2, shape = 21)+
+  scale_fill_manual(values = c("#deebf7", "#3182bd"))+
+  scale_color_manual(values = c("black", "black"))+
+  scale_y_continuous(limits = c(0,200), breaks = c(0, 50, 100, 150, 200))+
+  labs(y = "Surface [CO<sub>2</sub>]<br> (\u03bcmol L<sup>-1</sup>)")+
+  scale_x_discrete(labels = c("open" = "Open",
+                              "panel" = "Panels"))+
+  theme(axis.text.x =  element_text(size = 8,colour = "black"),
+         axis.text.y =  element_text(size = 8,colour = "black"),
+         axis.title.x = element_blank(),
+        axis.title.y = element_markdown(size = 8))+
+  theme(legend.position = "NULL")+
+  annotate("text", x = 1, y = 200, label = "p = 0.004", size = 2.822,  fontface = "italic")
+
+top_co2_box
+
+#repeat for the bottom water
+
+bottom_co2_fig_2023 = ggplot(data = bottom_headspace_2023, aes(x = doy, y = big_mean_co2, fill = treatment, color = treatment))+
+  geom_line()+
+  geom_point()+
+  theme_classic()+
+  geom_errorbar(aes(x = doy, ymin = big_mean_co2 - se_co2, ymax = big_mean_co2 + se_co2), width = 0, color = "black")+
+  geom_point(size = 3, shape = 16)+
+  geom_point(size = 3, shape = 1, color = "black")+
+  labs(y= "Bottom [CO<sub>2</sub>]<br> (\u03bcmol L<sup>-1</sup>)", x = "Day of Year")+
+  theme(axis.text.x =  element_text(size = 8,colour = "black"),
+         axis.text.y =  element_text(size = 8,colour = "black"),
+         axis.title.x = element_text(size = 8,colour = "black"),
+        axis.title.y = element_markdown(size = 8))+
+  scale_fill_manual(values = c("#deebf7", "#3182bd"))+
+  scale_color_manual(values = c("#deebf7", "#3182bd"))+
+  theme(legend.position = "NULL")+
+  scale_y_continuous(limits = c(0,800), breaks = c(0, 200, 400, 600, 800))+
+  scale_x_continuous(limits = c(141,308))+
+  annotate("text", x = (141), y = 800, label = "2023", size = 2.822,  fontface = "italic")+
+  geom_segment(aes(x = 166, y = 800, xend = 195, yend = 800), linewidth = 2, linetype = "solid", color = "gray")+
+  geom_segment(aes(x = 195, y = 800, xend = 306, yend = 800), linewidth = 2, linetype = "solid", color = "black")
+bottom_co2_fig_2023
+
+#and do the analysis
+headspace_mean_bottom = subset(headspace_mean, top_bottom == "Bottom")
+headspace_mean_bottom = subset(headspace_mean_bottom, condition != "construction")
+bottom_co2_model = lmer(mean_co2 ~ treatment*pre_post + doy + (1|pond), data = headspace_mean_bottom)
+summary(bottom_co2_model)
+lsmeans(bottom_co2_model, pairwise ~ treatment)
+
+bottom_co2_box = ggplot()+
+  theme_classic()+
+  geom_boxplot(data = headspace_mean_bottom, aes(x = condition, y = mean_co2), outlier.shape = NA, color = "black")+
+  geom_jitter(data = headspace_mean_bottom, aes(x = condition, y = mean_co2, fill = condition, color = condition),width = 0.2, size = 2, shape = 21)+
+  scale_fill_manual(values = c("#deebf7", "#3182bd"))+
+  scale_color_manual(values = c("black", "black"))+
+  scale_y_continuous(limits = c(0,800), breaks = c(0, 200, 400, 600, 800))+
+  labs(y= "Bottom [CO<sub>2</sub>]<br> (\u03bcmol L<sup>-1</sup>)")+
+  scale_x_discrete(labels = c("open" = "Open",
+                              "panel" = "Panels"))+
+  theme(axis.text.x =  element_text(size = 8,colour = "black"),
+         axis.text.y =  element_text(size = 8,colour = "black"),
+         axis.title.x = element_text(size = 8,colour = "black"),
+        axis.title.y = element_markdown(size = 8))+
+  theme(legend.position = "NULL")+
+  annotate("text", x = 1, y = 800, label = "p = 0.014", size = 2.822,  fontface = "italic")
+
+bottom_co2_box
+
+#and make the "fake figure" for 2022 bottom water
+bottom_2022_co2_empty = ggplot()+
+  theme_classic()+
+  scale_y_continuous(limits = c(0,800), breaks = c(0, 200, 400, 600, 800))+
+  annotate("text", x = (220), y = 0.05, label = "n.d.", size = 2.822,  fontface = "italic")+
+  labs(y= "Bottom [CO<sub>2</sub>]<br> (\u03bcmol L<sup>-1</sup>)", x = "Day of Year")+
+  theme(axis.text.x =  element_text(size = 8,colour = "black"),
+         axis.text.y =  element_text(size = 8,colour = "black"),
+         axis.title.x = element_blank(),
+        axis.title.y = element_markdown(size = 8))+
+  scale_x_continuous(limits = c(215,225), breaks = c(215,225))+
+  annotate("text", x = (220), y = 800, label = "2022", size = 2.822,  fontface = "italic")
+bottom_2022_co2_empty 
+
+#now put them all together
+floating_solar_co2_comp_plot = top_co2_fig_2022 + top_co2_fig_2023 + top_co2_box + bottom_2022_co2_empty + bottom_co2_fig_2023 + bottom_co2_box +
+  plot_layout(nrow = 2, ncol = 3, widths = c(1,16.7, 4))+
+  plot_annotation(tag_levels = "A", tag_suffix = '.')& 
+  theme(plot.tag = element_text(size = 8))
+floating_solar_co2_comp_plot
+
+floating_solar_co2_comp_plot[[1]] = floating_solar_co2_comp_plot[[1]] + theme(axis.title.x = element_blank())
+floating_solar_co2_comp_plot[[2]] = floating_solar_co2_comp_plot[[2]] + theme(axis.text.y = element_blank(),
+                                        axis.title.y = element_blank(),
+                                        axis.line.y = element_blank(),
+                                        axis.ticks.y = element_blank(),
+                                        axis.title.x = element_blank())
+floating_solar_co2_comp_plot[[5]] = floating_solar_co2_comp_plot[[5]] + theme(axis.text.y = element_blank(),
+                                        axis.title.y = element_blank(),
+                                        axis.line.y = element_blank(),
+                                        axis.ticks.y = element_blank())
+floating_solar_co2_comp_plot[[3]] = floating_solar_co2_comp_plot[[3]] + theme(axis.title.x = element_blank(),
+                                                                              axis.text.y = element_blank(),
+                                        axis.title.y = element_blank(),
+                                        axis.line.y = element_blank(),
+                                        axis.ticks.y = element_blank())
+floating_solar_co2_comp_plot[[6]] = floating_solar_co2_comp_plot[[6]] + theme(axis.title.x = element_blank(),
+                                                                              axis.text.y = element_blank(),
+                                        axis.title.y = element_blank(),
+                                        axis.line.y = element_blank(),
+                                        axis.ticks.y = element_blank())
+floating_solar_co2_comp_plot
+
+ggsave(filename = "floating_solar_co2_comp_plot.png", plot = floating_solar_co2_comp_plot, width = 6.75, height = 5, units = "in")
+```
+
+
+Repeat for CH4!
+```{r}
+#top water first
+max(top_headspace$big_mean_ch4)
+top_ch4_fig_2023 = ggplot(data = top_headspace_2023, aes(x = doy, y = big_mean_ch4, fill = treatment, color = treatment))+
+  geom_line()+
+  geom_point()+
+  theme_classic()+
+  geom_errorbar(aes(x = doy, ymin = big_mean_ch4 - se_ch4, ymax = big_mean_ch4 + se_ch4), width = 0, color = "black")+
+  geom_point(size = 3, shape = 16)+
+  geom_point(size = 3, shape = 1, color = "black")+
+  labs(y= "Surface [CH<sub>4</sub>]<br> (\u03bcmol L<sup>-1</sup>)", x = "Day of Year")+
+  theme(axis.text.x =  element_text(size = 8,colour = "black"),
+         axis.text.y =  element_text(size = 8,colour = "black"),
+         axis.title.x = element_blank(),
+        axis.title.y = element_markdown(size = 8))+
+  scale_fill_manual(values = c("#ffeda0", "#f03b20"))+
+  scale_color_manual(values = c("#ffeda0", "#f03b20"))+
+  theme(legend.position = "NULL")+
+  scale_y_continuous(limits = c(0,30), breaks = c(0, 10, 20, 30))+
+  scale_x_continuous(limits = c(141,308))+
+  annotate("text", x = (141), y = 30, label = "2023", size = 2.822,  fontface = "italic")+
+  geom_segment(aes(x = 166, y = 30, xend = 195, yend = 30), linewidth = 2, linetype = "solid", color = "gray")+
+  geom_segment(aes(x = 195, y = 30, xend = 306, yend = 30), linewidth = 2, linetype = "solid", color = "black")
+top_ch4_fig_2023
+
+top_ch4_fig_2022 = ggplot(data = top_headspace_2022, aes(x = doy, y = big_mean_ch4, fill = treatment, color = treatment))+
+  geom_line()+
+  geom_point()+
+  theme_classic()+
+  geom_errorbar(aes(x = doy, ymin = big_mean_ch4 - se_ch4, ymax = big_mean_ch4 + se_ch4), width = 0, color = "black")+
+  geom_point(size = 3, shape = 16)+
+  geom_point(size = 3, shape = 1, color = "black")+
+  labs(y= "Surface [CH<sub>4</sub>]<br> (\u03bcmol L<sup>-1</sup>)", x = "Day of Year")+
+  theme(axis.text.x =  element_text(size = 8,colour = "black"),
+         axis.text.y =  element_text(size = 8,colour = "black"),
+         axis.title.x = element_blank(),
+        axis.title.y = element_markdown(size = 8))+
+  scale_fill_manual(values = c("#ffeda0", "#f03b20"))+
+  scale_color_manual(values = c("#ffeda0", "#f03b20"))+
+  theme(legend.position = "NULL")+
+  annotate("text", x = (220), y = 30, label = "2022", size = 2.822,  fontface = "italic")+
+  scale_y_continuous(limits = c(0,30), breaks = c(0, 10, 20, 30))+
+  scale_x_continuous(limits = c(215,225), breaks = c(215,225))
+top_ch4_fig_2022
+
+top_ch4_model = lmer(mean_ch4 ~ treatment*pre_post + doy + (1|pond), data = headspace_mean_top)
+summary(top_ch4_model)
+lsmeans(top_ch4_model, pairwise ~ treatment)
+
+max(headspace_mean_top$mean_ch4)
+top_ch4_box = ggplot()+
+  theme_classic()+
+  geom_boxplot(data = headspace_mean_top, aes(x = condition, y = mean_ch4), outlier.shape = NA, color = "black")+
+  geom_jitter(data = headspace_mean_top, aes(x = condition, y = mean_ch4, fill = condition, color = condition),width = 0.2, size = 2, shape = 21)+
+  scale_fill_manual(values = c("#ffeda0", "#f03b20"))+
+  scale_color_manual(values = c("black", "black"))+
+  scale_y_continuous(limits = c(0,30), breaks = c(0, 10, 20, 30))+
+  scale_x_discrete(labels = c("open" = "Open",
+                              "panel" = "Panels"))+
+  theme(axis.text.x =  element_text(size = 8,colour = "black"),
+         axis.text.y =  element_text(size = 8,colour = "black"),
+         axis.title.x = element_blank(),
+        axis.title.y = element_markdown(size = 8))+
+  theme(legend.position = "NULL")+
+  annotate("text", x = 1, y = 30, label = "p = 0.046", size = 2.822,  fontface = "italic")
+top_ch4_box
+
+
+###repeat for the bottom water
+max(headspace_mean_bottom$mean_ch4)
+bottom_ch4_fig_2023 = ggplot(data = bottom_headspace_2023, aes(x = doy, y = big_mean_ch4, fill = treatment, color = treatment))+
+  geom_line()+
+  geom_point()+
+  theme_classic()+
+  geom_errorbar(aes(x = doy, ymin = big_mean_ch4 - se_ch4, ymax = big_mean_ch4 + se_ch4), width = 0, color = "black")+
+  geom_point(size = 3, shape = 16)+
+  geom_point(size = 3, shape = 1, color = "black")+
+  labs(y= "Bottom [CH<sub>4</sub>]<br> (\u03bcmol L<sup>-1</sup>)", x = "Day of Year")+
+  theme(axis.text.x =  element_text(size = 8,colour = "black"),
+         axis.text.y =  element_text(size = 8,colour = "black"),
+         axis.title.x = element_text(size = 8,colour = "black"),
+        axis.title.y = element_markdown(size = 8))+
+  scale_fill_manual(values = c("#ffeda0", "#f03b20"))+
+  scale_color_manual(values = c("#ffeda0", "#f03b20"))+
+  theme(legend.position = "NULL")+
+  scale_y_continuous(limits = c(0,850), breaks = c(0, 200, 400, 600, 800))+
+  scale_x_continuous(limits = c(141,308))+
+  annotate("text", x = (141), y = 850, label = "2023", size = 2.822,  fontface = "italic")+
+  geom_segment(aes(x = 166, y = 850, xend = 195, yend = 850), linewidth = 2, linetype = "solid", color = "gray")+
+  geom_segment(aes(x = 195, y = 850, xend = 306, yend = 850), linewidth = 2, linetype = "solid", color = "black")
+bottom_ch4_fig_2023
+
+bottom_ch4_model = lmer(mean_ch4 ~ treatment*pre_post + doy + (1|pond), data = headspace_mean_bottom)
+summary(bottom_ch4_model)
+lsmeans(bottom_ch4_model, pairwise ~ treatment)
+
+bottom_ch4_box = ggplot()+
+  theme_classic()+
+  geom_boxplot(data = headspace_mean_bottom, aes(x = condition, y = mean_ch4), outlier.shape = NA, color = "black")+
+  geom_jitter(data = headspace_mean_bottom, aes(x = condition, y = mean_ch4, fill = condition, color = condition),width = 0.2, size = 2, shape = 21)+
+  scale_fill_manual(values = c("#ffeda0", "#f03b20"))+
+  scale_color_manual(values = c("black", "black"))+
+  scale_y_continuous(limits = c(0,850), breaks = c(0, 200, 400, 600, 800))+
+  scale_x_discrete(labels = c("open" = "Open",
+                              "panel" = "Panels"))+
+  theme(axis.text.x =  element_text(size = 8,colour = "black"),
+         axis.text.y =  element_text(size = 8,colour = "black"),
+         axis.title.x = element_text(size = 8,colour = "black"),
+        axis.title.y = element_markdown(size = 8))+
+  theme(legend.position = "NULL")+
+  annotate("text", x = 1, y = 800, label = "p = 0.120", size = 2.822,  fontface = "italic")
+
+bottom_ch4_box
+
+#and make the "fake figure" for 2022 bottom water
+bottom_2022_ch4_empty = ggplot()+
+  theme_classic()+
+  scale_y_continuous(limits = c(0,850), breaks = c(0, 200, 400, 600, 800))+
+  annotate("text", x = (220), y = 0.05, label = "n.d.", size = 2.822,  fontface = "italic")+
+  annotate("text", x = (220), y = 850, label = "2022", size = 2.822,  fontface = "italic")+
+  labs(y= "Bottom [CH<sub>4</sub>]<br> (\u03bcmol L<sup>-1</sup>)", x = "Day of Year")+
+  theme(axis.text.x =  element_text(size = 8,colour = "black"),
+         axis.text.y =  element_text(size = 8,colour = "black"),
+         axis.title.x = element_blank(),
+        axis.title.y = element_markdown(size = 8))+
+  scale_x_continuous(limits = c(215,225), breaks = c(215,225))
+bottom_2022_ch4_empty 
+
+#put it together
+floating_solar_ch4_comp_plot = top_ch4_fig_2022 + top_ch4_fig_2023 + top_ch4_box + bottom_2022_ch4_empty + bottom_ch4_fig_2023 + bottom_ch4_box +
+  plot_layout(nrow = 2, ncol = 3, widths = c(1,16.7, 4))+
+  plot_annotation(tag_levels = "A", tag_suffix = '.')& 
+  theme(plot.tag = element_text(size = 8))
+floating_solar_ch4_comp_plot
+
+floating_solar_ch4_comp_plot[[1]] = floating_solar_ch4_comp_plot[[1]] + theme(axis.title.x = element_blank())
+floating_solar_ch4_comp_plot[[2]] = floating_solar_ch4_comp_plot[[2]] + theme(axis.text.y = element_blank(),
+                                        axis.title.y = element_blank(),
+                                        axis.line.y = element_blank(),
+                                        axis.ticks.y = element_blank(),
+                                        axis.title.x = element_blank())
+floating_solar_ch4_comp_plot[[5]] = floating_solar_ch4_comp_plot[[5]] + theme(axis.text.y = element_blank(),
+                                        axis.title.y = element_blank(),
+                                        axis.line.y = element_blank(),
+                                        axis.ticks.y = element_blank())
+floating_solar_ch4_comp_plot[[3]] = floating_solar_ch4_comp_plot[[3]] + theme(axis.text.y = element_blank(),
+                                        axis.title.y = element_blank(),
+                                        axis.line.y = element_blank(),
+                                        axis.ticks.y = element_blank(),
+                                        axis.title.x = element_blank())
+floating_solar_ch4_comp_plot[[6]] = floating_solar_ch4_comp_plot[[6]] + theme(axis.text.y = element_blank(),
+                                        axis.title.y = element_blank(),
+                                        axis.line.y = element_blank(),
+                                        axis.ticks.y = element_blank(),
+                                        axis.title.x = element_blank())
+floating_solar_ch4_comp_plot
+
+ggsave(filename = "floating_solar_ch4_comp_plot.png", plot = floating_solar_ch4_comp_plot, width = 6.75, height = 5, units = "in")
+```
+
+
+print out a csv of the surface headspace summary
+```{r}
+write.csv(top_headspace_2023, "C:/Users/localnickray/Dropbox/Cornell/Floating Solar Project/Manuscripts/Floating Solar GHG\\top_headspace_2023.csv", row.names = FALSE)
+```
+
+Calculate mean +- SE following installation (mean by treatment post install)
+```{r}
+#use the headspace_mean data frame
+post_install = subset(headspace_mean, pre_post == "post")
+post_install_treat = subset(post_install, treatment == "panel")
+post_install_ctrl = subset(post_install, treatment == "open")
+
+#figure out what n to use for getting to SE
+length(post_install_treat$mean_co2) #34 total, 16 bottom, 18 top
+length(post_install_ctrl$mean_co2) #65 total, 31 bottom, 34 top
+
+#FPV means and errors first
+panel_effect_means_treat = post_install_treat %>%
+  group_by(top_bottom) %>%
+  dplyr::summarize(big_mean_co2 = mean(mean_co2, na.rm = TRUE),
+                   big_se_co2 = (sd(mean_co2, na.rm = TRUE)/sqrt(length(mean_co2))),
+                   big_mean_ch4 = mean(mean_ch4, na.rm = TRUE),
+                   big_se_ch4 = (sd(mean_ch4, na.rm = TRUE)/sqrt(length(mean_ch4))))
+panel_effect_means_treat
+
+#repeat for panel ponds
+panel_effect_means_ctrl = post_install_ctrl %>%
+  group_by(top_bottom) %>%
+  dplyr::summarize(big_mean_co2 = mean(mean_co2, na.rm = TRUE),
+                   big_se_co2 = (sd(mean_co2, na.rm = TRUE)/sqrt(length(mean_co2))),
+                   big_mean_ch4 = mean(mean_ch4, na.rm = TRUE),
+                   big_se_ch4 = (sd(mean_ch4, na.rm = TRUE)/sqrt(length(mean_ch4))))
+panel_effect_means_ctrl
+```
+
+
+
+Analyze the ebullitive flux data
+Two figures - one with flux and comparison for main text and one for supplement that has volume and concentration used for calculating fluxes
+```{r}
+
+fs_eb_flux_dat <- read_excel("floating_solar_ghg_data.xlsx", 
+    sheet = "fs_eb_flux_dat")
+
+#make a treatment average dataset for the figures
+big_bubbles = fs_eb_flux_dat %>%
+  group_by(start_doy, end_doy, treatment) %>%
+  dplyr::summarize(big_vol = mean(vol_flux_ml_m2_h, na.rm = TRUE),
+                   se_vol = (sd(vol_flux_ml_m2_h, na.rm = TRUE)/sqrt(length(vol_flux_ml_m2_h))),
+                   big_ch4_conc = mean(ch4_conc_ppm, na.rm = TRUE),
+                   se_conc = (sd(ch4_conc_ppm, na.rm = TRUE)/sqrt(length(ch4_conc_ppm))),
+                   big_flux = mean(eb_ch4_mmol_m2_h),
+                   se_flux = (sd(eb_ch4_mmol_m2_h))/sqrt(length(eb_ch4_mmol_m2_h)))
+view(big_bubbles)
+
+#do the stats and figures for the bubble volume and concentration
+#volume first
+fs_eb_flux_dat$pond = as.factor(fs_eb_flux_dat$pond)
+eb_ch4_vol_model = lmer(vol_flux_ml_m2_h ~ treatment*pre_post + start_doy + (1|pond), data = fs_eb_flux_dat)
+summary(eb_ch4_vol_model)
+lsmeans(eb_ch4_vol_model, pairwise ~ treatment)
+
+mean_bubble_vol_fig = ggplot(data = big_bubbles, aes(x = start_doy, y = big_vol, fill = treatment, color = treatment))+
+  theme_classic()+
+  geom_line()+
+  geom_errorbar(aes(x = start_doy, ymin = big_vol - se_vol, ymax = big_vol + se_vol), width = 0, color = "black")+
+  geom_point(size = 3, shape = 16)+
+  geom_point(size = 3, shape = 1, color = "black")+
+  labs(y= "Hourly Bubble Accumulation<br>(mL m<sup>-2</sup> hr<sup>-1</sup>)", x = "Trap Deployment Start<br>(Day of Year)")+
+  theme(axis.text.x =  element_text(size = 8,colour = "black"),
+         axis.text.y =  element_text(size = 8,colour = "black"),
+         axis.title.x = element_markdown(size = 8),
+        axis.title.y = element_markdown(size = 8))+
+  scale_y_continuous(limits = c(0,35), breaks = c(0, 10,20, 30))+
+  scale_fill_manual(values = c("#ffeda0", "#f03b20"))+
+  scale_color_manual(values = c("#ffeda0", "#f03b20"))+
+  theme(legend.position = "NULL")+
+  geom_segment(aes(x = 166, y = 25, xend = 195, yend = 25), linewidth = 2, linetype = "solid", color = "gray")+
+  geom_segment(aes(x = 195, y = 25, xend = 306, yend = 25), linewidth = 2, linetype = "solid", color = "black")
+mean_bubble_vol_fig
+
+bubble_vol_box = ggplot()+
+  theme_classic()+
+  geom_boxplot(data = fs_eb_flux_dat, aes(x = condtion, y = vol_flux_ml_m2_h), outlier.shape = NA, color = "black")+
+  geom_jitter(data = fs_eb_flux_dat, aes(x = condtion, y = vol_flux_ml_m2_h, fill = condtion, color = condtion),width = 0.2, size = 2, shape = 21)+
+  scale_fill_manual(values = c("#ffeda0", "#f03b20"))+
+  scale_color_manual(values = c("black", "black"))+
+  scale_y_continuous(limits = c(0,35), breaks = c(0,10, 20, 30))+
+  scale_x_discrete(labels = c("open" = "Open",
+                              "panel" = "Panels"))+
+  theme(axis.text.x =  element_text(size = 8,colour = "black"),
+         axis.text.y =  element_text(size = 8,colour = "black"),
+         axis.title.x = element_text(size = 8,colour = "black"),
+        axis.title.y = element_markdown(size = 8))+
+  theme(legend.position = "NULL")+
+  annotate("text", x = 1, y = 35, label = "p = 0.914", size = 2.822,  fontface = "italic")
+bubble_vol_box
+
+#and repeat for the bubble CH4 concentration
+eb_ch4_conc_model = lmer((ch4_conc_ppm/10000) ~ treatment*pre_post + start_doy + (1|pond), data = fs_eb_flux_dat)
+summary(eb_ch4_conc_model)
+lsmeans(eb_ch4_conc_model, pairwise ~ treatment)
+
+mean_bubble_conc_fig = ggplot(data = big_bubbles, aes(x = start_doy, y = big_ch4_conc/10000, fill = treatment, color = treatment))+
+  theme_classic()+
+  geom_line()+
+  geom_errorbar(aes(x = start_doy, ymin = (big_ch4_conc - se_conc)/10000, ymax = (big_ch4_conc + se_conc)/10000), width = 0, color = "black")+
+  geom_point(size = 3, shape = 16)+
+  geom_point(size = 3, shape = 1, color = "black")+
+  labs(y= "Bubble CH<sub>4</sub> Conent<br>(% CH<sub>4</sub>)", x = "Trap Deployment Start<br>(Day of Year)")+
+  theme(axis.text.x =  element_text(size = 8,colour = "black"),
+         axis.text.y =  element_text(size = 8,colour = "black"),
+         axis.title.x = element_markdown(size = 8),
+        axis.title.y = element_markdown(size = 8))+
+  scale_y_continuous(limits = c(0,100), breaks = c(0,25, 50, 75, 100))+
+  scale_fill_manual(values = c("#ffeda0", "#f03b20"))+
+  scale_color_manual(values = c("#ffeda0", "#f03b20"))+
+  theme(legend.position = "NULL")+
+  geom_segment(aes(x = 166, y = 100, xend = 195, yend = 100), linewidth = 2, linetype = "solid", color = "gray")+
+  geom_segment(aes(x = 195, y = 100, xend = 306, yend = 100), linewidth = 2, linetype = "solid", color = "black")
+mean_bubble_conc_fig
+
+bubble_conc_box = ggplot()+
+  theme_classic()+
+  geom_boxplot(data = fs_eb_flux_dat, aes(x = condtion, y = (ch4_conc_ppm/10000)), outlier.shape = NA, color = "black")+
+  geom_jitter(data = fs_eb_flux_dat, aes(x = condtion, y = (ch4_conc_ppm/10000), fill = condtion, color = condtion),width = 0.2, size = 2, shape = 21)+
+  scale_fill_manual(values = c("#ffeda0", "#f03b20"))+
+  scale_color_manual(values = c("black", "black"))+
+  scale_y_continuous(limits = c(0,100), breaks = c(0,25, 50, 75, 100))+
+  scale_x_discrete(labels = c("open" = "Open",
+                              "panel" = "Panels"))+
+  theme(axis.text.x =  element_text(size = 8,colour = "black"),
+         axis.text.y =  element_text(size = 8,colour = "black"),
+         axis.title.x = element_text(size = 8,colour = "black"),
+        axis.title.y = element_markdown(size = 8))+
+  theme(legend.position = "NULL")+
+  annotate("text", x = 1, y = 100, label = "p = 0.016", size = 2.822,  fontface = "italic")
+bubble_conc_box
+
+#### and then do the statistics and make the comparison for the eb flux figure
+eb_ch4_model = lmer(eb_ch4_mmol_m2_h ~ treatment*pre_post + start_doy + (1|pond), data = fs_eb_flux_dat)
+summary(eb_ch4_model)
+lsmeans(eb_ch4_model, pairwise ~ treatment)
+
+eb_ch4_box = ggplot()+
+  theme_classic()+
+  geom_boxplot(data = fs_eb_flux_dat, aes(x = condtion, y = eb_ch4_mmol_m2_h), outlier.shape = NA, color = "black")+
+  geom_jitter(data = fs_eb_flux_dat, aes(x = condtion, y = eb_ch4_mmol_m2_h, fill = condtion, color = condtion),width = 0.2, size = 2, shape = 21)+
+  scale_fill_manual(values = c("#ffeda0", "#f03b20"))+
+  scale_color_manual(values = c("black", "black"))+
+  scale_y_continuous(limits = c(0,0.75), breaks = c(0, 0.25, 0.5, 0.75))+
+  scale_x_discrete(labels = c("open" = "Open",
+                              "panel" = "Panels"))+
+  theme(axis.text.x =  element_text(size = 8,colour = "black"),
+         axis.text.y =  element_text(size = 8,colour = "black"),
+         axis.title.x = element_text(size = 8,colour = "black"),
+        axis.title.y = element_markdown(size = 8))+
+  theme(legend.position = "NULL")+
+  annotate("text", x = 1, y = 0.75, label = "p = 0.140", size = 2.822,  fontface = "italic")
+eb_ch4_box
+
+mean_bubble_flux_fig = ggplot(data = big_bubbles, aes(x = start_doy, y = big_flux, fill = treatment, color = treatment))+
+  theme_classic()+
+  geom_line()+
+  geom_errorbar(aes(x = start_doy, ymin = big_flux - se_flux, ymax = big_flux + se_flux), width = 0, color = "black")+
+  geom_point(size = 3, shape = 16)+
+  geom_point(size = 3, shape = 1, color = "black")+
+  labs(y= "Ebullitive Flux<br>(mmol CH<sub>4</sub> m<sup>-2</sup> hr<sup>-1</sup>)", x = "Trap Deployment Start<br>(Day of Year)")+
+  theme(axis.text.x =  element_text(size = 8,colour = "black"),
+         axis.text.y =  element_text(size = 8,colour = "black"),
+         axis.title.x = element_markdown(size = 8),
+        axis.title.y = element_markdown(size = 8))+
+  scale_y_continuous(limits = c(0,0.75), breaks = c(0, 0.25, 0.5, 0.75))+
+  scale_fill_manual(values = c("#ffeda0", "#f03b20"))+
+  scale_color_manual(values = c("#ffeda0", "#f03b20"))+
+  theme(legend.position = "NULL")+
+  geom_segment(aes(x = 166, y = 0.75, xend = 195, yend = 0.75), linewidth = 2, linetype = "solid", color = "gray")+
+  geom_segment(aes(x = 195, y = 0.75, xend = 306, yend = 0.75), linewidth = 2, linetype = "solid", color = "black")
+mean_bubble_flux_fig
+
+
+#put the panels together!
+solar_bubble_supplement_plot = mean_bubble_vol_fig + bubble_vol_box + mean_bubble_conc_fig + bubble_conc_box +
+   plot_layout(nrow = 2, ncol = 2, widths = c(17.7, 4))+
+    plot_annotation(tag_levels = "A", tag_suffix = '.')& 
+  theme(plot.tag = element_text(size = 8))
+solar_bubble_supplement_plot
+
+solar_bubble_supplement_plot[[1]] = solar_bubble_supplement_plot[[1]] + theme(axis.title.x = element_blank())
+
+solar_bubble_supplement_plot[[2]] = solar_bubble_supplement_plot[[2]] + theme(axis.text.y = element_blank(),
+                                                      axis.title.y = element_blank(),
+                                                      axis.line.y = element_blank(),
+                                                      axis.ticks.y = element_blank(),
+                                                      axis.title.x = element_blank())
+
+solar_bubble_supplement_plot[[4]] = solar_bubble_supplement_plot[[4]] + theme(axis.text.y = element_blank(),
+                                                      axis.title.y = element_blank(),
+                                                      axis.line.y = element_blank(),
+                                                      axis.ticks.y = element_blank(),
+                                                      axis.title.x = element_blank())
+
+solar_bubble_supplement_plot
+
+ggsave(filename="solar_bubble_supplement_plot.png", plot=solar_bubble_supplement_plot, width = 6.5, height = 6, units = "in")
+
+#and the figure for the main manuscript:
+floating_eb_plot = mean_bubble_flux_fig + eb_ch4_box + 
+  plot_layout(nrow = 1, ncol = 2, widths = c(17.7, 4))+
+    plot_annotation(tag_levels = "A", tag_suffix = '.')& 
+  theme(plot.tag = element_text(size = 8))
+floating_eb_plot
+
+floating_eb_plot[[2]] = floating_eb_plot[[2]] + theme(axis.text.y = element_blank(),
+                                                      axis.title.y = element_blank(),
+                                                      axis.line.y = element_blank(),
+                                                      axis.ticks.y = element_blank(),
+                                                      axis.title.x = element_blank())
+floating_eb_plot
+ggsave(filename="floating_eb_plot.png", plot=floating_eb_plot, width = 6.5, height = 2.5, units = "in")
+```
+
+Get some mean + SE values for the manuscript
+```{r}
+bubble_post = subset(fs_eb_flux_dat, pre_post == "post")
+
+bubble_panel_means = bubble_post %>%
+  group_by(treatment) %>%
+  dplyr::summarize(mean_flux = mean(eb_ch4_mmol_m2_h, na.omit = TRUE),
+                   se_flux = (sd(eb_ch4_mmol_m2_h,na.rm = TRUE)/sqrt(length(eb_ch4_mmol_m2_h))),
+                   mean_vol = mean(vol_flux_ml_m2_h, na.rm = TRUE),
+                   se_vol = (sd(vol_flux_ml_m2_h,na.rm = TRUE)/sqrt(length(vol_flux_ml_m2_h))),
+                   mean_conc_perc = mean((ch4_conc_ppm/10000), na.rm = TRUE),
+                   se_conc = (sd((ch4_conc_ppm/10000),na.rm = TRUE)/sqrt(length(vol_flux_ml_m2_h))))
+
+bubble_panel_means
+```
+
+
+
+And make the time since installation figures - this will go in the supplement
+```{r}
+#get the data ready for surface concentrations
+mean_diff_open_top = subset(top_headspace_2023, condition == "open")
+mean_diff_panel_top = subset(headspace_mean, condition == "panel")
+open_diff_mean_top = merge(mean_diff_panel_top, mean_diff_open_top, by = c("doy"))
+open_diff_mean_top = subset(open_diff_mean_top, top_bottom.x == "Top")
+open_diff_mean_top$co2_diff = (open_diff_mean_top$mean_co2/open_diff_mean_top$big_mean_co2)
+open_diff_mean_top$ch4_diff = (open_diff_mean_top$mean_ch4/open_diff_mean_top$big_mean_ch4)
+
+#make the headspace figures
+days_since_co2_surface_plot = ggplot(data = open_diff_mean_top, aes(x = days_since_install, y = co2_diff, fill = pond, color = pond))+
+  theme_classic()+
+  geom_line()+
+  geom_point(size = 3, shape = 16)+
+  geom_point(size = 3, shape = 1, color = "black")+
+  geom_hline(yintercept = 1, linetype = "dashed")+
+  scale_fill_manual(values = c("#deebf7", "#9ecae1", "#3182bd"))+
+  scale_color_manual(values = c("#deebf7", "#9ecae1", "#3182bd"))+
+  theme(legend.position = "NULL")+
+  labs(y= "Difference in Surface [CO<sub>2</sub>]<br>Panel Pond [CO<sub>2</sub>] \U00F7 Mean Open Pond [CO<sub>2</sub>]", 
+       x = "Days Since Panel Installation Completed")+
+  scale_y_continuous(limits = c(0,6), breaks = c(0,2,4,6))+
+  scale_x_continuous(limits = c(0,150), breaks = c(0,50, 100, 150))+
+  theme(axis.text.x =  element_text(size = 8,colour = "black"),
+         axis.text.y =  element_text(size = 8,colour = "black"),
+         axis.title.x =  element_text(size = 8,colour = "black"),
+        axis.title.y = element_markdown(size = 8))
+days_since_co2_surface_plot
+
+days_since_ch4_surface_plot = ggplot(data = open_diff_mean_top, aes(x = days_since_install, y = ch4_diff, fill = pond, color = pond))+
+  theme_classic()+
+  geom_line()+
+  geom_point(size = 3, shape = 16)+
+  geom_point(size = 3, shape = 1, color = "black")+
+  geom_hline(yintercept = 1, linetype = "dashed")+
+  scale_fill_manual(values = c("#ffeda0", "#feb24c", "#f03b20"))+
+  scale_color_manual(values = c("#ffeda0", "#feb24c", "#f03b20"))+
+  theme(legend.position = "NULL")+
+  labs(y= "Difference in Surface [CH<sub>4</sub>]<br>Panel Pond [CH<sub>4</sub>] \U00F7 Mean Open Pond [CH<sub>4</sub>]", 
+       x = "Days Since Panel Installation Completed")+
+  scale_y_continuous(limits = c(0,15), breaks = c(0,5,10,15))+
+  scale_x_continuous(limits = c(0,150), breaks = c(0,50, 100, 150))+
+  theme(axis.text.x =  element_text(size = 8,colour = "black"),
+         axis.text.y =  element_text(size = 8,colour = "black"),
+         axis.title.x =  element_text(size = 8,colour = "black"),
+        axis.title.y = element_markdown(size = 8))
+days_since_ch4_surface_plot
+
+###
+#and repeat for the bottom water
+mean_diff_open_bottom = subset(bottom_headspace_2023, condition == "open")
+mean_diff_panel_bottom = subset(headspace_mean, condition == "panel")
+open_diff_mean_bottom = merge(mean_diff_panel_bottom, mean_diff_open_bottom, by = c("doy"))
+open_diff_mean_bottom = subset(open_diff_mean_bottom, top_bottom.x == "Bottom")
+open_diff_mean_bottom$co2_diff = (open_diff_mean_bottom$mean_co2/open_diff_mean_bottom$big_mean_co2)
+open_diff_mean_bottom$ch4_diff = (open_diff_mean_bottom$mean_ch4/open_diff_mean_bottom$big_mean_ch4)
+
+#make the headspace figures
+days_since_co2_bottom_plot = ggplot(data = open_diff_mean_bottom, aes(x = days_since_install, y = co2_diff, fill = pond, color = pond))+
+  theme_classic()+
+  geom_line()+
+  geom_point(size = 3, shape = 16)+
+  geom_point(size = 3, shape = 1, color = "black")+
+  geom_hline(yintercept = 1, linetype = "dashed")+
+  scale_fill_manual(values = c("#deebf7", "#9ecae1", "#3182bd"))+
+  scale_color_manual(values = c("#deebf7", "#9ecae1", "#3182bd"))+
+  theme(legend.position = "NULL")+
+  labs(y= "Difference in Bottom Water [CO<sub>2</sub>]<br>Panel Pond [CO<sub>2</sub>] \U00F7 Mean Open Pond [CO<sub>2</sub>]", 
+       x = "Days Since Panel Installation Completed")+
+  scale_y_continuous(limits = c(0,6), breaks = c(0,2,4,6))+
+  scale_x_continuous(limits = c(0,150), breaks = c(0,50, 100, 150))+
+  theme(axis.text.x =  element_text(size = 8,colour = "black"),
+         axis.text.y =  element_text(size = 8,colour = "black"),
+         axis.title.x =  element_text(size = 8,colour = "black"),
+        axis.title.y = element_markdown(size = 8))
+days_since_co2_bottom_plot
+
+days_since_ch4_bottom_plot = ggplot(data = open_diff_mean_bottom, aes(x = days_since_install, y = ch4_diff, fill = pond, color = pond))+
+  theme_classic()+
+  geom_line()+
+  geom_point(size = 3, shape = 16)+
+  geom_point(size = 3, shape = 1, color = "black")+
+  geom_hline(yintercept = 1, linetype = "dashed")+
+  scale_fill_manual(values = c("#ffeda0", "#feb24c", "#f03b20"))+
+  scale_color_manual(values = c("#ffeda0", "#feb24c", "#f03b20"))+
+  theme(legend.position = "NULL")+
+  labs(y= "Difference in Bottom Water [CH<sub>4</sub>]<br>Panel Pond [CH<sub>4</sub>] \U00F7 Mean Open Pond [CH<sub>4</sub>]", 
+       x = "Days Since Panel Installation Completed")+
+  scale_y_continuous(limits = c(0,30), breaks = c(0,10, 20, 30))+
+  scale_x_continuous(limits = c(0,150), breaks = c(0,50, 100, 150))+
+  theme(axis.text.x =  element_text(size = 8,colour = "black"),
+         axis.text.y =  element_text(size = 8,colour = "black"),
+         axis.title.x =  element_text(size = 8,colour = "black"),
+        axis.title.y = element_markdown(size = 8))
+days_since_ch4_bottom_plot
+
+#ok put the co2 panels together
+co2_since = days_since_co2_surface_plot + days_since_co2_bottom_plot +
+  plot_layout(nrow = 2, ncol = 1)+
+    plot_annotation(tag_levels = "A", tag_suffix = '.')& 
+  theme(plot.tag = element_text(size = 8))
+co2_since
+
+co2_since[[1]] = co2_since[[1]] + theme(axis.text.x = element_blank(), axis.title.x = element_blank())
+co2_since
+
+ggsave(filename="co2_since_plot.png", plot=co2_since, width = 3.25, height = 6, units = "in")
+
+
+#and put the ch4 panels together
+ch4_since = days_since_ch4_surface_plot + days_since_ch4_bottom_plot +
+  plot_layout(nrow = 2, ncol = 1)+
+    plot_annotation(tag_levels = "A", tag_suffix = '.')& 
+  theme(plot.tag = element_text(size = 8))
+ch4_since
+
+ch4_since[[1]] = ch4_since[[1]] + theme(axis.text.x = element_blank(), axis.title.x = element_blank())
+ch4_since
+
+ggsave(filename="ch4_since_plot.png", plot=ch4_since, width = 3.25, height = 6, units = "in")
+
+```
+
+
+Make a "time since" plot for the ebullitive fluxes
+```{r}
+##### and the bubbles
+mean_eb_open = subset(fs_eb_flux_dat, condtion == "open")
+mean_eb_open = mean_eb_open %>%
+  group_by(start_doy, end_doy) %>%
+  dplyr::summarize(big_vol = mean(vol_flux_ml_m2_h, na.rm = TRUE),
+                   se_vol = (sd(vol_flux_ml_m2_h, na.rm = TRUE)/length(vol_flux_ml_m2_h)),
+                   big_ch4_conc = mean(ch4_conc_ppm, na.rm = TRUE),
+                   se_conc = (sd(ch4_conc_ppm, na.rm = TRUE)/length(ch4_conc_ppm)),
+                   big_flux = mean(eb_ch4_mmol_m2_h),
+                   se_flux = (sd(eb_ch4_mmol_m2_h))/length(eb_ch4_mmol_m2_h))
+
+eb_panel = subset(fs_eb_flux_dat, condtion == "panel")
+eb_diff = merge(mean_eb_open, eb_panel, by = c("start_doy"))
+eb_diff$flux_diff = (eb_diff$eb_ch4_mmol_m2_h/eb_diff$big_flux)
+
+eb_diff$pond = as.factor(eb_diff$pond)
+eb_diff
+
+days_since_ebch4_plot = ggplot(data = eb_diff, aes(x = days_since_install, y = flux_diff, fill = pond, color = pond))+
+  theme_classic()+
+  geom_line()+
+  geom_point(size = 3, shape = 16)+
+  geom_point(size = 3, shape = 1, color = "black")+
+  geom_hline(yintercept = 1, linetype = "dashed")+
+  scale_fill_manual(values = c("#ffeda0", "#feb24c"))+
+  scale_color_manual(values = c("#ffeda0", "#feb24c"))+
+  theme(legend.position = "NULL")+
+  labs(y= "Difference in CH<sub>4</sub> Ebullition<br>Panel Pond \U00F7 Mean Open Pond", 
+       x = "Days Since Panel Installation Completed")+
+  scale_y_continuous(limits = c(0,6), breaks = c(0,2,4,6))+
+  #scale_x_continuous(limits = c(0,150), breaks = c(0,50, 100, 150))
+  theme(axis.text.x =  element_text(size = 8,colour = "black"),
+         axis.text.y =  element_text(size = 8,colour = "black"),
+         axis.title.x = element_text(size = 8,colour = "black"),
+        axis.title.y = element_markdown(size = 8))
+days_since_ebch4_plot
+
+ggsave(filename="days_since_ebch4_plot.png", plot=days_since_ebch4_plot, width = 3.25, height = 3, units = "in")
+```
+
+
+And make figure 5
+```{r}
+
+fig5a_dat <- read_excel("floating_solar_ghg_data.xlsx", 
+    sheet = "fig5a_dat")
+
+#make a bargraph
+fig5a_dat_squished = fig5a_dat %>%
+  group_by(gas) %>%
+  dplyr::summarize(mean = mean(perc_diff, na.rm = TRUE),
+                   se = (sd(perc_diff)/sqrt(length(perc_diff))))
+view(fig5a_dat_squished)
+
+perc_diff_plot = ggplot(data = fig5a_dat_squished, aes(x = gas, y = mean, fill = gas))+
+  theme_classic()+
+
+  geom_bar(stat = "identity")+
+  geom_errorbar(aes(x = gas, ymin = mean - se, ymax = mean + se), width = 0, color = "black")+
+  labs(y = "Relative Change in Emissions (%)")+
+  scale_y_continuous(limits = c(-100, 100), breaks = c(-100, -50, 0, 50, 100))+
+  scale_x_discrete(limit = c("dif_co2", "dif_ch4","eb_ch4","bulk"), labels = c("Diffusive<br>CO<sub>2</sub> Flux",
+                                                                               "Diffusive<br>CH<sub>4</sub> Flux",
+                                                                               "Ebullitive<br>CH<sub>4</sub> Flux",
+                                                                               "Total Emissions<br>(kg CO<sub>2</sub>-eq)"))+
+  scale_fill_manual(values = c("#ef767a", "#feb24c", "#feb24c", "#9ecae1"))+
+  theme(axis.text.x = element_text(angle = 30, vjust = 0.5, hjust=1))+
+  geom_hline(yintercept = 0, color = "black")+
+  theme(axis.text.x =  element_markdown(size = 8, color = "black"),
+         axis.text.y =  element_text(size = 8,colour = "black"),
+         axis.title.x = element_blank(),
+        axis.title.y = element_markdown(size = 8, color = "black"))+
+  theme(legend.position = "none")
+perc_diff_plot
+
+#and then make fig 5b
+fig5b_dat <- read_excel("floating_solar_ghg_data.xlsx", 
+    sheet = "fig5b_dat")
+
+fig_5b = ggplot(data = fig5b_dat, aes(x = doy, y = emissions, fill = treatment, color = treatment))+
+  theme_classic()+
+  geom_line()+
+  geom_point(size = 3, shape = 16)+
+  geom_point(size = 3, shape = 1, color = "black")+
+  scale_fill_manual(values = c("#f6b6b8", "#db1a20"))+
+  scale_color_manual(values = c("#f6b6b8", "#db1a20"))+
+    labs(y= "Daily Pond Emissions<br>(kg CO<sub>2</sub>-eq d<sup>-1</sup>)", 
+       x = "Day of Year")+
+  scale_y_continuous(limits = c(0,12.5), breaks = c(0,2.5, 5, 7.5, 10, 12.5))+
+  theme(axis.text.x =  element_text(size = 8,colour = "black"),
+         axis.text.y =  element_text(size = 8,colour = "black"),
+         axis.title.x =  element_text(size = 8,colour = "black"),
+        axis.title.y = element_markdown(size = 8))+
+  theme(legend.position = "none")+
+  geom_point(aes(x = 270, y =12.5), color = "#f6b6b8", size = 3, shape = 16)+
+  geom_point(aes(x = 270, y =12.5),size = 3, shape = 1, color = "black")+
+  annotate("text", x = 280, y = 12.5, label = "Open", size = 2.822)+
+  geom_point(aes(x = 270, y =11.5), color = "#db1a20", size = 3, shape = 16)+
+  geom_point(aes(x = 270, y =11.5),size = 3, shape = 1, color = "black")+
+  annotate("text", x = 280, y = 11.5, label = "Panel", size = 2.822)
+fig_5b
+
+#put the two plots together
+fig_5 = perc_diff_plot + fig_5b +
+  plot_layout(nrow = 1, ncol = 2)+
+  plot_annotation(tag_levels = "A", tag_suffix = '.')& 
+  theme(plot.tag = element_text(size = 8))
+fig_5  
+
+ggsave(filename="fig_5.png", plot=fig_5, width = 6.5, height = 3, units = "in")
+```
+
+
+And a simple statistical comparison of the k600 values
+```{r}
+
+
+k600_values <- read_excel("floating_solar_ghg_data.xlsx", 
+    sheet = "k600_values")
+
+#make the center comparisons (one tailed t test with unequal variance)
+center_k600 = subset(k600_values, location == "center")
+center_co2_test = t.test(k600_co2 ~ treatment, data = center_k600, alternative = "greater", var.equal = FALSE)
+center_co2_test
+center_ch4_test = t.test(k600_ch4 ~ treatment, data = center_k600, alternative = "greater", var.equal = FALSE)
+center_ch4_test
+
+#and repeat for the edges
+edge_k600 = subset(k600_values, location == "edge")
+edge_co2_test = t.test(k600_co2 ~ treatment, data = edge_k600, alternative = "greater", var.equal = FALSE)
+edge_co2_test
+edge_ch4_test = t.test(k600_ch4 ~ treatment, data = edge_k600, alternative = "greater", var.equal = FALSE)
+edge_ch4_test
+
+```
+
