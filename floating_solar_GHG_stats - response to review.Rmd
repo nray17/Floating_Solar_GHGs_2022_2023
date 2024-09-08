@@ -140,7 +140,7 @@ headspace_mean_top = subset(headspace_mean_top, condition != "construction")
 
 top_co2_model = lmer(mean_co2 ~ treatment*pre_post + doy + (1|pond), data = headspace_mean_top)
 summary(top_co2_model)
-lsmeans(top_co2_model, pairwise ~ treatment)
+lsmeans(top_co2_model, pairwise ~ treatment*pre_post)
 
 #make a little boxplot showing all the open vs. panel values
 top_co2_box = ggplot()+
@@ -158,7 +158,7 @@ top_co2_box = ggplot()+
          axis.title.x = element_blank(),
         axis.title.y = element_markdown(size = 8))+
   theme(legend.position = "NULL")+
-  annotate("text", x = 1, y = 200, label = "p = 0.004", size = 2.822,  fontface = "italic")
+  annotate("text", x = 1, y = 200, label = "p < 0.001", size = 2.822,  fontface = "italic")
 
 top_co2_box
 
@@ -191,7 +191,7 @@ headspace_mean_bottom = subset(headspace_mean, top_bottom == "Bottom")
 headspace_mean_bottom = subset(headspace_mean_bottom, condition != "construction")
 bottom_co2_model = lmer(mean_co2 ~ treatment*pre_post + doy + (1|pond), data = headspace_mean_bottom)
 summary(bottom_co2_model)
-lsmeans(bottom_co2_model, pairwise ~ treatment)
+lsmeans(bottom_co2_model, pairwise ~ treatment*pre_post)
 
 bottom_co2_box = ggplot()+
   theme_classic()+
@@ -208,7 +208,7 @@ bottom_co2_box = ggplot()+
          axis.title.x = element_text(size = 8,colour = "black"),
         axis.title.y = element_markdown(size = 8))+
   theme(legend.position = "NULL")+
-  annotate("text", x = 1, y = 800, label = "p = 0.014", size = 2.822,  fontface = "italic")
+  annotate("text", x = 1, y = 800, label = "p < 0.001", size = 2.822,  fontface = "italic")
 
 bottom_co2_box
 
@@ -307,7 +307,7 @@ top_ch4_fig_2022
 
 top_ch4_model = lmer(mean_ch4 ~ treatment*pre_post + doy + (1|pond), data = headspace_mean_top)
 summary(top_ch4_model)
-lsmeans(top_ch4_model, pairwise ~ treatment)
+lsmeans(top_ch4_model, pairwise ~ treatment*pre_post)
 
 max(headspace_mean_top$mean_ch4)
 top_ch4_box = ggplot()+
@@ -324,7 +324,7 @@ top_ch4_box = ggplot()+
          axis.title.x = element_blank(),
         axis.title.y = element_markdown(size = 8))+
   theme(legend.position = "NULL")+
-  annotate("text", x = 1, y = 30, label = "p = 0.046", size = 2.822,  fontface = "italic")
+  annotate("text", x = 1, y = 30, label = "p = 0.031", size = 2.822,  fontface = "italic")
 top_ch4_box
 
 
@@ -354,7 +354,7 @@ bottom_ch4_fig_2023
 
 bottom_ch4_model = lmer(mean_ch4 ~ treatment*pre_post + doy + (1|pond), data = headspace_mean_bottom)
 summary(bottom_ch4_model)
-lsmeans(bottom_ch4_model, pairwise ~ treatment)
+lsmeans(bottom_ch4_model, pairwise ~ treatment*pre_post)
 
 bottom_ch4_box = ggplot()+
   theme_classic()+
@@ -370,7 +370,7 @@ bottom_ch4_box = ggplot()+
          axis.title.x = element_text(size = 8,colour = "black"),
         axis.title.y = element_markdown(size = 8))+
   theme(legend.position = "NULL")+
-  annotate("text", x = 1, y = 800, label = "p = 0.120", size = 2.822,  fontface = "italic")
+  annotate("text", x = 1, y = 800, label = "p = 0.004", size = 2.822,  fontface = "italic")
 
 bottom_ch4_box
 
@@ -481,7 +481,7 @@ view(big_bubbles)
 fs_eb_flux_dat$pond = as.factor(fs_eb_flux_dat$pond)
 eb_ch4_vol_model = lmer(vol_flux_ml_m2_h ~ treatment*pre_post + start_doy + (1|pond), data = fs_eb_flux_dat)
 summary(eb_ch4_vol_model)
-lsmeans(eb_ch4_vol_model, pairwise ~ treatment)
+lsmeans(eb_ch4_vol_model, pairwise ~ treatment*pre_post)
 
 mean_bubble_vol_fig = ggplot(data = big_bubbles, aes(x = start_doy, y = big_vol, fill = treatment, color = treatment))+
   theme_classic()+
@@ -516,13 +516,13 @@ bubble_vol_box = ggplot()+
          axis.title.x = element_text(size = 8,colour = "black"),
         axis.title.y = element_markdown(size = 8))+
   theme(legend.position = "NULL")+
-  annotate("text", x = 1, y = 35, label = "p = 0.914", size = 2.822,  fontface = "italic")
+  annotate("text", x = 1, y = 35, label = "p = 0.955", size = 2.822,  fontface = "italic")
 bubble_vol_box
 
 #and repeat for the bubble CH4 concentration
 eb_ch4_conc_model = lmer((ch4_conc_ppm/10000) ~ treatment*pre_post + start_doy + (1|pond), data = fs_eb_flux_dat)
 summary(eb_ch4_conc_model)
-lsmeans(eb_ch4_conc_model, pairwise ~ treatment)
+lsmeans(eb_ch4_conc_model, pairwise ~ treatment*pre_post)
 
 mean_bubble_conc_fig = ggplot(data = big_bubbles, aes(x = start_doy, y = big_ch4_conc/10000, fill = treatment, color = treatment))+
   theme_classic()+
@@ -557,13 +557,13 @@ bubble_conc_box = ggplot()+
          axis.title.x = element_text(size = 8,colour = "black"),
         axis.title.y = element_markdown(size = 8))+
   theme(legend.position = "NULL")+
-  annotate("text", x = 1, y = 100, label = "p = 0.016", size = 2.822,  fontface = "italic")
+  annotate("text", x = 1, y = 100, label = "p < 0.001", size = 2.822,  fontface = "italic")
 bubble_conc_box
 
 #### and then do the statistics and make the comparison for the eb flux figure
 eb_ch4_model = lmer(eb_ch4_mmol_m2_h ~ treatment*pre_post + start_doy + (1|pond), data = fs_eb_flux_dat)
 summary(eb_ch4_model)
-lsmeans(eb_ch4_model, pairwise ~ treatment)
+lsmeans(eb_ch4_model, pairwise ~ treatment*pre_post)
 
 eb_ch4_box = ggplot()+
   theme_classic()+
@@ -579,7 +579,7 @@ eb_ch4_box = ggplot()+
          axis.title.x = element_text(size = 8,colour = "black"),
         axis.title.y = element_markdown(size = 8))+
   theme(legend.position = "NULL")+
-  annotate("text", x = 1, y = 0.75, label = "p = 0.140", size = 2.822,  fontface = "italic")
+  annotate("text", x = 1, y = 0.75, label = "p = 0.031", size = 2.822,  fontface = "italic")
 eb_ch4_box
 
 mean_bubble_flux_fig = ggplot(data = big_bubbles, aes(x = start_doy, y = big_flux, fill = treatment, color = treatment))+
